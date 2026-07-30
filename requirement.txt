@@ -1,0 +1,28 @@
+# ST-LLM+ runtime dependencies
+# Recommended Python version: 3.10
+
+--extra-index-url https://download.pytorch.org/whl/cu118
+--find-links https://data.pyg.org/whl/torch-2.3.1+cu118.html
+
+# Numerical and data processing
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.3.3
+Bottleneck==1.6.0
+
+# PyTorch CUDA 11.8
+torch==2.3.1+cu118
+torchvision==0.18.1+cu118
+torchaudio==2.3.1+cu118
+
+# PyTorch Geometric and ABI-matched CUDA extensions
+torch-geometric==2.5.3
+torch-scatter==2.1.2+pt23cu118
+torch-sparse==0.6.18+pt23cu118
+torch-cluster==1.6.3+pt23cu118
+torch-spline-conv==1.2.2+pt23cu118
+
+# GPT-2 and LoRA
+transformers==4.36.2
+peft==0.11.1
+accelerate==0.31.0
