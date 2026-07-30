@@ -1,0 +1,26 @@
+
+mkdir -p data
+unzip bike_drop.zip -d data
+unzip bike_pick.zip -d data
+unzip taxi_drop.zip -d data
+unzip taxi_pick.zip -d data
+
+cp data/bike_drop/adj_mx.pkl data/bike_pick/
+cp data/taxi_drop/adj_mx.pkl data/taxi_pick/
+
+python -u train_plus.py \
+  --device cuda:0 \
+  --data taxi_pick \
+  --batch_size 16
+
+mkdir -p logs
+
+for data in taxi_pick taxi_drop bike_pick bike_drop; do
+  nohup conda run --no-capture-output -n st-llm-plus \
+    python -u train_plus.py \
+    --device cuda:0 \
+    --data "$data" \
+    > "logs/train_${data}.log" 2>&1 &
+
+  echo "$data started, PID=$!"
+done
