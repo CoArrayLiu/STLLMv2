@@ -14,6 +14,12 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:180'
 parser = argparse.ArgumentParser()
 parser.add_argument("--device", type=str, default="cuda:7", help="")
 parser.add_argument("--data", type=str, default="bike_drop", help="data path")
+parser.add_argument(
+    "--adj_path",
+    type=str,
+    default=None,
+    help="custom adjacency matrix path; defaults to data/<dataset>/adj_mx.pkl",
+)
 parser.add_argument("--batch_size", type=int, default=64, help="batch size")
 parser.add_argument("--lrate", type=float, default=1e-3, help="learning rate")
 parser.add_argument("--epochs", type=int, default=300, help="500")
@@ -40,7 +46,27 @@ parser.add_argument(
     help="quit if no improvement after this many iterations"
     )
 args = parser.parse_args()
-adj_mx = load_graph_data(f"data/{args.data}/adj_mx.pkl") # nyc
+adj_path = args.adj_path or f"data/{args.data}/adj_mx.pkl"
+adj_mx = load_graph_data(adj_path)
+
+expected_num_nodes = {
+    "bike_drop": 250,
+    "bike_pick": 250,
+    "taxi_drop": 266,
+    "taxi_pick": 266,
+}.get(args.data)
+if expected_num_nodes is not None and adj_mx.shape != (
+    expected_num_nodes,
+    expected_num_nodes,
+):
+    raise ValueError(
+        f"Adjacency matrix shape mismatch for {args.data}: "
+        f"expected {(expected_num_nodes, expected_num_nodes)}, got {adj_mx.shape} "
+        f"from {adj_path}"
+    )
+
+print(f"Using adjacency matrix: {adj_path}")
+print(f"Adjacency shape: {adj_mx.shape}, dtype: {adj_mx.dtype}")
 
 class trainer:
     def __init__(
