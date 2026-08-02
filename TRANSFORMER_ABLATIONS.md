@@ -5,6 +5,8 @@
 
 - `model_ST_Transformer_adaptive.py`：三种空间注意力分配方式。
 - `train_transformer_ablation.py`：独立训练、验证和测试入口。
+- `prepare_pems08.py`：PEMS08 无泄漏时间切分与 12→12 窗口生成。
+- `PEMS08_QK.md`：PEMS08 QK 适配、调优参数和实测结果。
 
 ## 三种配置
 
@@ -32,8 +34,11 @@
 | `bike_pick` | 250 | `adp/bp/adaptive_adj_mx.pkl` |
 | `taxi_drop` | 266 | `adp/td/adaptive_adj_mx.pkl` |
 | `taxi_pick` | 266 | `adp/tp/adaptive_adj_mx.pkl` |
+| `pems08` | 170 | QK 不使用图；物理/语义图仅供显式图实验 |
 
-可以使用 `--adaptive_adj_path` 覆盖默认路径。`qk` 模式完全不加载或使用图。
+图模式必须显式传入 `--graph_type adaptive|physical|semantic`，可使用
+`--graph_path` 覆盖配置路径；加载器按后缀区分 `.pkl/.pickle` 与 `.npy`。
+`qk` 模式完全不加载或使用图，并拒绝图参数。
 
 ## 单次训练
 
@@ -43,6 +48,7 @@ conda run --no-capture-output -n st-llm-plus \
   --device cuda:0 \
   --data bike_drop \
   --attention_mode qk_graph \
+  --graph_type adaptive \
   --batch_size 384 \
   --eval_batch_size 64 \
   --precision bf16
@@ -66,6 +72,7 @@ conda run --no-capture-output -n st-llm-plus \
   --device cuda:0 \
   --data bike_drop \
   --attention_mode graph \
+  --graph_type adaptive \
   --batch_size 8 \
   --d_model 256 \
   --num_heads 8 \
@@ -101,8 +108,8 @@ conda run --no-capture-output -n st-llm-plus \
 BF16 只影响模型前向和反向；损失、MAE、RMSE 等指标仍以 FP32 计算。FP16 会自动
 启用梯度缩放。TF32 默认开启，可使用 `--disable_tf32` 关闭。
 
-建议设置 `--eval_batch_size 64`。如果验证也使用 384，870 条验证样本会被补齐到
-1152 条并重复最后一个样本，从而影响 early stopping；训练和评估 batch 必须分离。
+验证和测试不再补齐末 batch，聚合指标按真实样本数加权。因此
+`--eval_batch_size` 只影响评测吞吐与显存，不会因重复末样本改变 early stopping。
 
 ## 运行四个数据集的三种实验
 
@@ -113,11 +120,16 @@ experiment_root="logs/transformer_ablation_seed6666"
 
 for dataset in bike_drop bike_pick taxi_drop taxi_pick; do
   for mode in qk graph qk_graph; do
+    graph_args=()
+    if [[ "$mode" != "qk" ]]; then
+      graph_args=(--graph_type adaptive)
+    fi
     conda run --no-capture-output -n st-llm-plus \
       python -u train_transformer_ablation.py \
       --device cuda:0 \
       --data "$dataset" \
       --attention_mode "$mode" \
+      "${graph_args[@]}" \
       --seed 6666 \
       --batch_size 384 \
       --eval_batch_size 64 \

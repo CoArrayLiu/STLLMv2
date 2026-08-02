@@ -2,8 +2,10 @@
 
 Examples:
     python -u train_transformer_ablation.py --data bike_drop --attention_mode qk
-    python -u train_transformer_ablation.py --data bike_drop --attention_mode graph
-    python -u train_transformer_ablation.py --data bike_drop --attention_mode qk_graph
+    python -u train_transformer_ablation.py --data bike_drop \
+        --attention_mode graph --graph_type adaptive
+    python -u train_transformer_ablation.py --data bike_drop \
+        --attention_mode qk_graph --graph_type adaptive
 
 This is a standalone entry point and does not import or modify train_plus.py.
 """
@@ -23,16 +25,9 @@ import pandas as pd
 import torch
 
 import util
+from dataset_config import DATASET_CONFIG, GRAPH_TYPES, get_dataset_config
 from model_ST_Transformer_adaptive import ATTENTION_MODES, STTransformerAdaptive
 from ranger21 import Ranger
-
-
-DATASET_CONFIG = {
-    "bike_drop": {"num_nodes": 250, "adaptive_graph": "adp/bd/adaptive_adj_mx.pkl"},
-    "bike_pick": {"num_nodes": 250, "adaptive_graph": "adp/bp/adaptive_adj_mx.pkl"},
-    "taxi_drop": {"num_nodes": 266, "adaptive_graph": "adp/td/adaptive_adj_mx.pkl"},
-    "taxi_pick": {"num_nodes": 266, "adaptive_graph": "adp/tp/adaptive_adj_mx.pkl"},
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         description="ST-LLM+ QK/adaptive-graph Transformer ablations"
     )
     parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--data", choices=DATASET_CONFIG, default="bike_drop")
+    parser.add_argument("--data", choices=sorted(DATASET_CONFIG), default="bike_drop")
     parser.add_argument(
         "--attention_mode",
         choices=ATTENTION_MODES,
@@ -48,10 +43,24 @@ def parse_args() -> argparse.Namespace:
         help="qk: standard attention; graph: A@V; qk_graph: QK plus log(A) prior",
     )
     parser.add_argument(
-        "--adaptive_adj_path",
+        "--dataset_path",
         type=str,
         default=None,
-        help="Override the dataset-specific path in DATASET_CONFIG",
+        help="Override the dataset_path declared in DATASET_CONFIG",
+    )
+    parser.add_argument(
+        "--graph_type",
+        choices=GRAPH_TYPES,
+        default=None,
+        help="Required by graph/qk_graph; declares graph semantics explicitly",
+    )
+    parser.add_argument(
+        "--graph_path",
+        "--adaptive_adj_path",
+        dest="graph_path",
+        type=str,
+        default=None,
+        help="Override the selected graph path; supports .npy/.pkl/.pickle",
     )
 
     parser.add_argument("--batch_size", type=int, default=16)
@@ -75,9 +84,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--lrate", type=float, default=1e-3)
     parser.add_argument("--wdecay", type=float, default=1e-4)
+    parser.add_argument(
+        "--loss_space",
+        choices=("auto", "original", "standardized"),
+        default="auto",
+        help=(
+            "Backward MAE space; metrics always remain in original units. "
+            "auto uses the dataset recommendation."
+        ),
+    )
     parser.add_argument("--input_dim", type=int, default=3)
     parser.add_argument("--input_len", type=int, default=12)
     parser.add_argument("--output_len", type=int, default=12)
+    parser.add_argument(
+        "--lr_scheduler",
+        choices=("none", "plateau"),
+        default="none",
+        help="Optional validation-MAE learning-rate schedule",
+    )
+    parser.add_argument("--lr_patience", type=int, default=5)
+    parser.add_argument("--lr_factor", type=float, default=0.5)
+    parser.add_argument("--min_lrate", type=float, default=1e-5)
 
     parser.add_argument("--d_model", type=int, default=768)
     parser.add_argument("--num_heads", type=int, default=12)
@@ -108,6 +135,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Output root; default is a new timestamped directory under logs/",
     )
+    parser.add_argument("--print_model", action="store_true")
     return parser.parse_args()
 
 
@@ -155,39 +183,65 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--eval_batch_size must be positive")
     if args.precision != "fp32" and not torch.cuda.is_available():
         raise ValueError(f"--precision {args.precision} requires CUDA")
+    if args.lr_patience <= 0:
+        raise ValueError("--lr_patience must be positive")
+    if not 0 < args.lr_factor < 1:
+        raise ValueError("--lr_factor must be in (0, 1)")
+    if args.min_lrate <= 0 or args.min_lrate >= args.lrate:
+        raise ValueError("--min_lrate must be positive and less than --lrate")
+
+    if args.attention_mode == "qk":
+        if args.graph_type is not None or args.graph_path is not None:
+            raise ValueError("qk mode does not accept --graph_type or --graph_path")
+    elif args.graph_type is None:
+        raise ValueError(
+            f"--graph_type is required for attention_mode={args.attention_mode!r}; "
+            "choose adaptive, physical, or semantic"
+        )
 
 
-def load_adaptive_graph(
+def load_graph(
     args: argparse.Namespace,
 ) -> tuple[Optional[np.ndarray], Optional[Path], Optional[dict]]:
     if args.attention_mode == "qk":
         return None, None, None
 
-    graph_path = Path(
-        args.adaptive_adj_path
-        or DATASET_CONFIG[args.data]["adaptive_graph"]
-    )
+    dataset_config = get_dataset_config(args.data)
+    if args.graph_path is not None:
+        graph_path = Path(args.graph_path)
+    else:
+        try:
+            graph_path = dataset_config.graphs[args.graph_type]
+        except KeyError as error:
+            available = ", ".join(sorted(dataset_config.graphs)) or "none"
+            raise ValueError(
+                f"Dataset {args.data!r} has no configured {args.graph_type!r} graph; "
+                f"available graph types: {available}. Pass --graph_path explicitly "
+                "if a compatible graph has been prepared."
+            ) from error
     if not graph_path.is_file():
-        raise FileNotFoundError(f"Adaptive graph not found: {graph_path}")
+        raise FileNotFoundError(f"Graph does not exist: {graph_path}")
 
     graph = np.asarray(util.load_graph_data(str(graph_path)), dtype=np.float32)
-    num_nodes = DATASET_CONFIG[args.data]["num_nodes"]
+    num_nodes = dataset_config.num_nodes
     expected_shape = (num_nodes, num_nodes)
     if graph.shape != expected_shape:
         raise ValueError(
-            f"Adaptive graph shape mismatch for {args.data}: expected "
+            f"Graph shape mismatch for {args.data}: expected "
             f"{expected_shape}, got {graph.shape} from {graph_path}"
         )
     if not np.isfinite(graph).all():
-        raise ValueError(f"Adaptive graph contains NaN/Inf: {graph_path}")
+        raise ValueError(f"Graph contains NaN/Inf: {graph_path}")
     if np.any(graph < 0):
-        raise ValueError(f"Adaptive graph contains negative weights: {graph_path}")
+        raise ValueError(f"Graph contains negative weights: {graph_path}")
 
     row_sums = graph.sum(axis=1)
     nonzero_per_row = np.count_nonzero(graph, axis=1)
     top_k = min(10, num_nodes)
     top10_mass = np.partition(graph, -top_k, axis=1)[:, -top_k:].sum(axis=1)
     stats = {
+        "graph_type": args.graph_type,
+        "file_format": graph_path.suffix.lower(),
         "path": str(graph_path),
         "shape": list(graph.shape),
         "dtype": str(graph.dtype),
@@ -225,10 +279,17 @@ class Trainer:
         adaptive_graph: Optional[np.ndarray],
         device: torch.device,
     ) -> None:
+        dataset_config = get_dataset_config(args.data)
+        self.loss_space = (
+            dataset_config.loss_space
+            if args.loss_space == "auto"
+            else args.loss_space
+        )
         self.model = STTransformerAdaptive(
             adaptive_graph=adaptive_graph,
+            time_slots=dataset_config.time_slots,
             input_dim=args.input_dim,
-            num_nodes=DATASET_CONFIG[args.data]["num_nodes"],
+            num_nodes=dataset_config.num_nodes,
             input_len=args.input_len,
             output_len=args.output_len,
             attention_mode=args.attention_mode,
@@ -243,6 +304,17 @@ class Trainer:
         ).to(device)
         self.optimizer = Ranger(
             self.model.parameters(), lr=args.lrate, weight_decay=args.wdecay
+        )
+        self.lr_scheduler = (
+            torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=args.lr_factor,
+                patience=args.lr_patience,
+                min_lr=args.min_lrate,
+            )
+            if args.lr_scheduler == "plateau"
+            else None
         )
         self.scaler = scaler
         self.grad_clip = args.grad_clip
@@ -259,7 +331,15 @@ class Trainer:
         print(f"Model parameters: {self.model.param_num():,}")
         print(f"Trainable parameters: {self.model.count_trainable_params():,}")
         print(f"Training precision: {args.precision}")
-        print(self.model)
+        print(f"Optimization loss space: {self.loss_space}")
+        print(f"LR scheduler: {args.lr_scheduler}")
+        if args.print_model:
+            print(self.model)
+
+    def step_lr_scheduler(self, validation_loss: float) -> float:
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step(validation_loss)
+        return float(self.optimizer.param_groups[0]["lr"])
 
     def _metrics(
         self, model_input: torch.Tensor, real_value: torch.Tensor
@@ -275,31 +355,45 @@ class Trainer:
 
     def train_batch(
         self, model_input: torch.Tensor, real_value: torch.Tensor
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float, float, float, int]:
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(
             enabled=self.amp_enabled, dtype=self.amp_dtype
         ):
             metrics = self._metrics(model_input, real_value)
-        self.loss_scaler.scale(metrics[0]).backward()
-        if self.grad_clip is not None and self.grad_clip > 0:
-            self.loss_scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+        optimization_loss = metrics[0]
+        if self.loss_space == "standardized":
+            optimization_loss = optimization_loss / self.scaler.std
+        self.loss_scaler.scale(optimization_loss).backward()
+        self.loss_scaler.unscale_(self.optimizer)
+        max_norm = self.grad_clip if self.grad_clip > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=max_norm
+        )
+        if not torch.isfinite(grad_norm):
+            raise FloatingPointError(f"Non-finite gradient norm: {grad_norm.item()}")
+        grad_norm_value = grad_norm.detach().item()
+        was_clipped = float(self.grad_clip > 0 and grad_norm_value > self.grad_clip)
         self.loss_scaler.step(self.optimizer)
         self.loss_scaler.update()
-        return tuple(metric.detach().item() for metric in metrics)
+        return (
+            *(metric.detach().item() for metric in metrics),
+            grad_norm_value,
+            was_clipped,
+            model_input.shape[0],
+        )
 
     @torch.no_grad()
     def eval_batch(
         self, model_input: torch.Tensor, real_value: torch.Tensor
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float, int]:
         self.model.eval()
         with torch.cuda.amp.autocast(
             enabled=self.amp_enabled, dtype=self.amp_dtype
         ):
             metrics = self._metrics(model_input, real_value)
-        return tuple(metric.item() for metric in metrics)
+        return (*(metric.item() for metric in metrics), model_input.shape[0])
 
 
 def prepare_batch(
@@ -314,14 +408,30 @@ def prepare_batch(
     return model_input, target
 
 
-def aggregate_metrics(values: list[tuple[float, float, float, float]]) -> dict:
+def aggregate_metrics(values: list[tuple[float, ...]]) -> dict:
     array = np.asarray(values, dtype=np.float64)
-    return {
-        "loss": float(array[:, 0].mean()),
-        "mape": float(array[:, 1].mean()),
-        "rmse": float(array[:, 2].mean()),
-        "wmape": float(array[:, 3].mean()),
+    if array.shape[1] == 7:
+        weights = array[:, 6]
+    elif array.shape[1] == 5:
+        weights = array[:, 4]
+    else:
+        weights = np.ones(len(array), dtype=np.float64)
+    result = {
+        "loss": float(np.average(array[:, 0], weights=weights)),
+        "mape": float(np.average(array[:, 1], weights=weights)),
+        "rmse": float(np.average(array[:, 2], weights=weights)),
+        "wmape": float(np.average(array[:, 3], weights=weights)),
+        "samples": int(weights.sum()),
     }
+    if array.shape[1] == 7:
+        result.update(
+            {
+                "grad_norm_mean": float(array[:, 4].mean()),
+                "grad_norm_max": float(array[:, 4].max()),
+                "grad_clip_rate": float(array[:, 5].mean()),
+            }
+        )
+    return result
 
 
 @torch.no_grad()
@@ -393,7 +503,9 @@ def main() -> None:
         if tf32_enabled:
             torch.set_float32_matmul_precision("high")
 
-    adaptive_graph, graph_path, graph_stats = load_adaptive_graph(args)
+    dataset_config = get_dataset_config(args.data)
+    dataset_path = Path(args.dataset_path) if args.dataset_path else dataset_config.dataset_path
+    adaptive_graph, graph_path, graph_stats = load_graph(args)
     output_dir = make_output_dir(args)
     checkpoint_path = output_dir / "best_model.pth"
     eval_batch_size = args.eval_batch_size or args.batch_size
@@ -401,9 +513,18 @@ def main() -> None:
     config = vars(args).copy()
     config.update(
         {
-            "num_nodes": DATASET_CONFIG[args.data]["num_nodes"],
-            "dataset_path": str(Path("data") / args.data),
-            "resolved_adaptive_adj_path": (
+            "num_nodes": dataset_config.num_nodes,
+            "time_slots": dataset_config.time_slots,
+            "dataset_recommended_training": dict(
+                dataset_config.recommended_training
+            ),
+            "resolved_loss_space": (
+                dataset_config.loss_space
+                if args.loss_space == "auto"
+                else args.loss_space
+            ),
+            "dataset_path": str(dataset_path),
+            "resolved_graph_path": (
                 str(graph_path) if graph_path is not None else None
             ),
             "output_dir": str(output_dir),
@@ -418,19 +539,23 @@ def main() -> None:
 
     print(f"Dataset: {args.data}")
     print(f"Attention mode: {args.attention_mode}")
-    print(f"Adaptive graph: {graph_path if graph_path else 'not used'}")
+    print(f"Graph type: {args.graph_type if graph_path else 'not used'}")
+    print(f"Graph path: {graph_path if graph_path else 'not used'}")
     print(f"Output directory: {output_dir}")
     print(f"Train/eval batch size: {args.batch_size}/{eval_batch_size}")
     print(
         f"TF32 enabled: {device.type == 'cuda' and not args.disable_tf32}"
     )
 
-    dataset_path = Path("data") / args.data
     dataloader = util.load_dataset(
         str(dataset_path),
         args.batch_size,
         eval_batch_size,
         eval_batch_size,
+        expected_num_nodes=dataset_config.num_nodes,
+        expected_input_len=args.input_len,
+        expected_output_len=args.output_len,
+        expected_input_dim=args.input_dim,
     )
     trainer = Trainer(
         args=args,
@@ -447,12 +572,21 @@ def main() -> None:
     validation_times = []
 
     for epoch in range(1, args.epochs + 1):
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         start = time.time()
+        dataloader["train_loader"].shuffle()
         train_values = []
         for x, y in dataloader["train_loader"].get_iterator():
             model_input, target = prepare_batch(x, y, device)
             train_values.append(trainer.train_batch(model_input, target))
         train_times.append(time.time() - start)
+        train_throughput = dataloader["train_loader"].size / train_times[-1]
+        peak_memory_gib = (
+            torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+            if device.type == "cuda"
+            else 0.0
+        )
 
         start = time.time()
         validation_values = []
@@ -463,18 +597,25 @@ def main() -> None:
 
         train_metrics = aggregate_metrics(train_values)
         validation_metrics = aggregate_metrics(validation_values)
+        current_lrate = trainer.step_lr_scheduler(validation_metrics["loss"])
         alphas = trainer.model.graph_alphas()
         row = {
             "epoch": epoch,
+            "lrate": current_lrate,
             "train_loss": train_metrics["loss"],
             "train_rmse": train_metrics["rmse"],
             "train_mape": train_metrics["mape"],
+            "grad_norm_mean": train_metrics["grad_norm_mean"],
+            "grad_norm_max": train_metrics["grad_norm_max"],
+            "grad_clip_rate": train_metrics["grad_clip_rate"],
             "train_wmape": train_metrics["wmape"],
             "valid_loss": validation_metrics["loss"],
             "valid_rmse": validation_metrics["rmse"],
             "valid_mape": validation_metrics["mape"],
             "valid_wmape": validation_metrics["wmape"],
             "train_seconds": train_times[-1],
+            "train_samples_per_second": train_throughput,
+            "peak_memory_gib": peak_memory_gib,
             "validation_seconds": validation_times[-1],
             "graph_alpha_mean": float(np.mean(alphas)) if alphas else np.nan,
             "graph_alphas": json.dumps(alphas),
@@ -487,7 +628,11 @@ def main() -> None:
             f"RMSE {train_metrics['rmse']:.4f} | valid MAE "
             f"{validation_metrics['loss']:.4f} RMSE "
             f"{validation_metrics['rmse']:.4f} | "
-            f"{train_times[-1]:.2f}s train {validation_times[-1]:.2f}s valid"
+            f"grad {train_metrics['grad_norm_mean']:.2f}/"
+            f"{train_metrics['grad_norm_max']:.2f} clip "
+            f"{train_metrics['grad_clip_rate']:.1%} | {train_times[-1]:.2f}s train "
+            f"{validation_times[-1]:.2f}s valid | {train_throughput:.1f} sample/s "
+            f"{peak_memory_gib:.2f} GiB | lr {current_lrate:.2g}"
         )
         if alphas:
             print("Graph alphas: " + ", ".join(f"{value:.4f}" for value in alphas))
@@ -538,6 +683,14 @@ def main() -> None:
         "model_parameters": trainer.model.param_num(),
         "trainable_parameters": trainer.model.count_trainable_params(),
         "graph_alphas": trainer.model.graph_alphas(),
+        "final_lrate": float(trainer.optimizer.param_groups[0]["lr"]),
+        "mean_grad_clip_rate": float(
+            np.mean([row["grad_clip_rate"] for row in history])
+        ),
+        "peak_memory_gib": float(max(row["peak_memory_gib"] for row in history)),
+        "average_train_samples_per_second": float(
+            np.mean([row["train_samples_per_second"] for row in history])
+        ),
         "average_train_seconds": float(np.mean(train_times)),
         "average_validation_seconds": float(np.mean(validation_times)),
     }

@@ -24,3 +24,6 @@ for data in taxi_pick taxi_drop bike_pick bike_drop; do
 
   echo "$data started, PID=$!"
 done
+
+
+

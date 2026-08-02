@@ -201,6 +201,7 @@ class STTransformerAdaptive(nn.Module):
     def __init__(
         self,
         adaptive_graph: Optional[torch.Tensor],
+        time_slots: int,
         input_dim: int = 3,
         num_nodes: int = 250,
         input_len: int = 12,
@@ -225,19 +226,14 @@ class STTransformerAdaptive(nn.Module):
             raise ValueError(
                 "input_dim must be at least 3: value, time-of-day, day-of-week"
             )
-        if num_nodes in {170, 207}:
-            time_slots = 288
-        elif num_nodes in {250, 266}:
-            time_slots = 48
-        else:
-            raise ValueError(
-                f"No time-slot convention is defined for num_nodes={num_nodes}"
-            )
+        if time_slots <= 0:
+            raise ValueError("time_slots must be positive")
 
         self.input_dim = input_dim
         self.num_nodes = num_nodes
         self.input_len = input_len
         self.output_len = output_len
+        self.time_slots = time_slots
         self.attention_mode = attention_mode
 
         graph = None
@@ -338,4 +334,3 @@ class STTransformerAdaptive(nn.Module):
         tokens = self.final_norm(tokens)
         outputs = tokens.permute(0, 2, 1).unsqueeze(-1)
         return self.regression_layer(outputs)
-
