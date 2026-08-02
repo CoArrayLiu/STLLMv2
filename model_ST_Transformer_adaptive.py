@@ -215,6 +215,8 @@ class STTransformerAdaptive(nn.Module):
         dropout: float = 0.1,
         graph_alpha: float = 1.0,
         graph_epsilon: float = 1e-8,
+        learn_node_embedding: bool = True,
+        learn_prediction_head: bool = True,
     ) -> None:
         super().__init__()
         if attention_mode not in ATTENTION_MODES:
@@ -235,6 +237,7 @@ class STTransformerAdaptive(nn.Module):
         self.output_len = output_len
         self.time_slots = time_slots
         self.attention_mode = attention_mode
+        self.embedding_dim = embedding_dim
 
         graph = None
         if attention_mode in {"graph", "qk_graph"}:
@@ -252,8 +255,13 @@ class STTransformerAdaptive(nn.Module):
             input_dim * input_len, embedding_dim, kernel_size=(1, 1)
         )
         self.temporal_embedding = TemporalEmbedding(time_slots, embedding_dim)
-        self.node_embedding = nn.Parameter(torch.empty(num_nodes, embedding_dim))
-        nn.init.xavier_uniform_(self.node_embedding)
+        if learn_node_embedding:
+            self.node_embedding = nn.Parameter(
+                torch.empty(num_nodes, embedding_dim)
+            )
+            nn.init.xavier_uniform_(self.node_embedding)
+        else:
+            self.register_parameter("node_embedding", None)
         self.input_projection = nn.Conv2d(
             embedding_dim * 3, d_model, kernel_size=(1, 1)
         )
@@ -275,9 +283,12 @@ class STTransformerAdaptive(nn.Module):
             ]
         )
         self.final_norm = nn.LayerNorm(d_model)
-        self.regression_layer = nn.Conv2d(
-            d_model, output_len, kernel_size=(1, 1)
-        )
+        if learn_prediction_head:
+            self.regression_layer = nn.Conv2d(
+                d_model, output_len, kernel_size=(1, 1)
+            )
+        else:
+            self.regression_layer = None
 
     def param_num(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters())
@@ -296,32 +307,59 @@ class STTransformerAdaptive(nn.Module):
                 alphas.append(layer.mixer.graph_alpha.detach().item())
         return alphas
 
-    def forward(self, history_data: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        history_data: torch.Tensor,
+        node_embedding_override: Optional[torch.Tensor] = None,
+        prediction_head_override: Optional[nn.Module] = None,
+    ) -> torch.Tensor:
         if history_data.ndim != 4:
             raise ValueError(
                 "history_data must have shape [batch, features, nodes, history]"
             )
         batch_size, input_dim, num_nodes, input_len = history_data.shape
-        if (input_dim, num_nodes, input_len) != (
-            self.input_dim,
-            self.num_nodes,
-            self.input_len,
-        ):
+        if (input_dim, input_len) != (self.input_dim, self.input_len):
             raise ValueError(
                 "Input shape mismatch after batch dimension: expected "
-                f"{(self.input_dim, self.num_nodes, self.input_len)}, got "
-                f"{(input_dim, num_nodes, input_len)}"
+                f"input_dim/input_len={(self.input_dim, self.input_len)}, got "
+                f"{(input_dim, input_len)}"
+            )
+        if self.attention_mode != "qk" and num_nodes != self.num_nodes:
+            raise ValueError(
+                "Graph attention requires the configured number of nodes: "
+                f"expected {self.num_nodes}, got {num_nodes}"
+            )
+
+        if node_embedding_override is not None:
+            expected_shape = (num_nodes, self.embedding_dim)
+            if tuple(node_embedding_override.shape) != expected_shape:
+                raise ValueError(
+                    "Node embedding override shape mismatch: expected "
+                    f"{expected_shape}, got {tuple(node_embedding_override.shape)}"
+                )
+            node_embedding = node_embedding_override
+        elif self.node_embedding is not None:
+            if num_nodes != self.num_nodes:
+                raise ValueError(
+                    "Learned node embedding requires the configured number of "
+                    f"nodes: expected {self.num_nodes}, got {num_nodes}"
+                )
+            node_embedding = self.node_embedding
+        else:
+            raise ValueError(
+                "This model requires node_embedding_override because its internal "
+                "node embedding is disabled"
             )
 
         data = history_data.permute(0, 3, 2, 1)
         temporal = self.temporal_embedding(data)
-        node = self.node_embedding.transpose(0, 1).view(
-            1, -1, self.num_nodes, 1
+        node = node_embedding.transpose(0, 1).view(
+            1, -1, num_nodes, 1
         )
         node = node.expand(batch_size, -1, -1, -1)
 
         flattened = history_data.transpose(1, 2).contiguous()
-        flattened = flattened.view(batch_size, self.num_nodes, -1)
+        flattened = flattened.view(batch_size, num_nodes, -1)
         flattened = flattened.transpose(1, 2).unsqueeze(-1)
         encoded = self.start_conv(flattened)
 
@@ -333,4 +371,12 @@ class STTransformerAdaptive(nn.Module):
             tokens = layer(tokens)
         tokens = self.final_norm(tokens)
         outputs = tokens.permute(0, 2, 1).unsqueeze(-1)
-        return self.regression_layer(outputs)
+        prediction_head = prediction_head_override
+        if prediction_head is None:
+            prediction_head = self.regression_layer
+        if prediction_head is None:
+            raise ValueError(
+                "This model requires prediction_head_override because its internal "
+                "prediction head is disabled"
+            )
+        return prediction_head(outputs)
