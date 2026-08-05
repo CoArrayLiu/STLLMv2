@@ -1,0 +1,7 @@
+variant,num_layers,parameter_mode,completed,planned,mean_parameter_ratio,macro_mae_delta_percent,mean_train_samples_per_second,mean_peak_memory_gib,mean_wall_seconds,status
+remove_last_1_reduced,5,reduced,4,4,0.836,1.899,971.6,48.42,944.1,complete
+remove_last_1_matched,5,matched,4,4,1.000,2.040,860.9,51.43,1053.3,complete
+remove_last_2_reduced,4,reduced,4,4,0.672,1.642,1182.7,39.36,772.2,complete
+remove_last_2_matched,4,matched,4,4,1.000,1.850,962.4,45.19,947.5,complete
+remove_last_3_reduced,3,reduced,4,4,0.508,1.665,1498.9,30.31,610.6,complete
+remove_last_3_matched,3,matched,4,4,1.000,2.311,1052.9,38.63,870.4,complete

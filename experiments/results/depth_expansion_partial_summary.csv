@@ -1,0 +1,7 @@
+variant,num_layers,parameter_mode,completed,planned,mean_parameter_ratio,partial_macro_mae_delta_percent,mean_train_samples_per_second,mean_peak_memory_gib,mean_wall_seconds,status
+add_last_1_unmatched,7,unmatched,4,4,1.164,0.893,725.0,53.46,1247.4,complete
+add_last_1_matched,7,matched,4,4,1.000,1.264,740.9,50.80,1218.5,complete
+add_last_2_unmatched,8,unmatched,4,4,1.328,1.103,632.4,60.73,1428.5,complete
+add_last_2_matched,8,matched,1,4,0.999,1.508,657.8,57.73,1360.2,partial-one-dataset-only
+add_last_3_unmatched,9,unmatched,0,4,,,,,,not-started
+add_last_3_matched,9,matched,0,4,,,,,,not-started

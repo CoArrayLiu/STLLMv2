@@ -1,0 +1,31 @@
+experiment,model,dataset,seed,status,mae,rmse,mape,wmape,notes
+E01,ST-LLM+,taxi_drop,unknown,complete,5.2032,9.1257,,0.1986,local reproduction
+E01,ST-LLM+,taxi_pick,unknown,complete,5.3259,9.3011,,0.2015,local reproduction
+E01,ST-LLM+,bike_drop,unknown,complete,1.9146,2.8702,,0.3871,local reproduction
+E01,ST-LLM+,bike_pick,unknown,complete,2.0152,3.1371,,0.4059,local reproduction
+E02,QK,taxi_drop,6666,complete,5.0863,,,,summary-only artifact
+E02,QK,taxi_pick,6666,complete,5.1835,,,,summary-only artifact
+E02,QK,bike_drop,6666,complete,1.8965,,,,summary-only artifact
+E02,QK,bike_pick,6666,complete,2.0088,,,,summary-only artifact
+E02,Graph-dense,taxi_drop,6666,complete,5.2567,,,,summary-only artifact
+E02,Graph-dense,taxi_pick,6666,complete,5.4358,,,,summary-only artifact
+E02,Graph-dense,bike_drop,6666,complete,1.8772,,,,summary-only artifact
+E02,Graph-dense,bike_pick,6666,complete,1.9817,,,,summary-only artifact
+E02,QK+Graph-dense,taxi_drop,6666,complete,5.0234,,,,summary-only artifact
+E02,QK+Graph-dense,taxi_pick,6666,complete,5.2382,,,,summary-only artifact
+E02,QK+Graph-dense,bike_drop,6666,complete,1.8884,,,,summary-only artifact
+E02,QK+Graph-dense,bike_pick,6666,complete,2.0134,,,,summary-only artifact
+E02,Graph-top10,taxi_drop,6666,complete,5.3707,,,,summary-only artifact
+E02,Graph-top10,taxi_pick,6666,complete,5.3540,,,,summary-only artifact
+E02,Graph-top10,bike_drop,6666,complete,1.8914,,,,summary-only artifact
+E02,Graph-top10,bike_pick,6666,complete,1.9965,,,,summary-only artifact
+E02,QK+Graph-top10,taxi_drop,6666,complete,5.2116,,,,summary-only artifact
+E02,QK+Graph-top10,taxi_pick,6666,complete,5.3050,,,,summary-only artifact
+E02,QK+Graph-top10,bike_drop,6666,complete,1.8796,,,,summary-only artifact
+E02,QK+Graph-top10,bike_pick,6666,complete,2.0002,,,,summary-only artifact
+E03,persistence,pems08,na,complete,25.3756,37.9981,0.1557,0.1090,test baseline
+E03,QK,pems08,6666,complete,16.5136,25.9672,0.1201,0.0709,best epoch 58
+E05,QK-joint,taxi_drop,6666,complete,5.125735,9.740473,0.354118,0.195616,best epoch 282
+E05,QK-joint,taxi_pick,6666,complete,5.274734,9.161536,0.346004,0.199557,best epoch 282
+E05,QK-joint,bike_drop,6666,complete,1.882924,2.831411,0.495775,0.380648,best epoch 282
+E05,QK-joint,bike_pick,6666,complete,2.005917,3.144132,0.526871,0.404028,best epoch 282
