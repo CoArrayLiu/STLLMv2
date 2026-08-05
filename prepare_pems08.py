@@ -23,13 +23,14 @@ SPLIT_NAMES = ("train", "val", "test")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare leakage-free PEMS08 Transformer windows"
+        description="Prepare leakage-free spatiotemporal Transformer windows"
     )
     parser.add_argument(
         "--source",
         type=Path,
         default=Path("data/st_data/pems08/pems08.npz"),
     )
+    parser.add_argument("--source_key", default="data")
     parser.add_argument("--output_dir", type=Path, default=Path("data/pems08"))
     parser.add_argument("--start_time", default="2016-07-01T00:00:00")
     parser.add_argument("--interval_minutes", type=int, default=5)
@@ -237,7 +238,7 @@ def main() -> None:
     if args.input_len <= 0 or args.output_len <= 0:
         raise ValueError("input_len and output_len must be positive")
     if not args.source.is_file():
-        raise FileNotFoundError(f"PEMS08 source does not exist: {args.source}")
+        raise FileNotFoundError(f"Source does not exist: {args.source}")
 
     output_files = [args.output_dir / f"{name}.npz" for name in SPLIT_NAMES]
     output_files.extend(
@@ -251,17 +252,35 @@ def main() -> None:
             "pass --overwrite to replace it"
         )
 
-    with np.load(args.source) as archive:
-        if "data" not in archive:
-            raise KeyError(f"Source archive has no 'data' key: {archive.files}")
-        raw = np.asarray(archive["data"])
-    if raw.ndim != 3 or raw.shape[-1] < 1:
-        raise ValueError(f"Expected source shape [time, nodes, features], got {raw.shape}")
-    values = np.asarray(raw[..., 0], dtype=np.float32)
+    if args.source.suffix.lower() == ".npz":
+        with np.load(args.source) as archive:
+            if args.source_key not in archive:
+                raise KeyError(
+                    f"Source archive has no {args.source_key!r} key: {archive.files}"
+                )
+            raw = np.asarray(archive[args.source_key])
+    elif args.source.suffix.lower() in {".h5", ".hdf5"}:
+        import h5py
+
+        with h5py.File(args.source, "r") as handle:
+            if args.source_key not in handle:
+                raise KeyError(f"HDF5 source has no {args.source_key!r} dataset")
+            raw = np.asarray(handle[args.source_key])
+    else:
+        raise ValueError(f"Unsupported source format: {args.source.suffix}")
+    if raw.ndim == 2:
+        values = np.asarray(raw, dtype=np.float32)
+    elif raw.ndim == 3 and raw.shape[-1] >= 1:
+        values = np.asarray(raw[..., 0], dtype=np.float32)
+    else:
+        raise ValueError(
+            "Expected source shape [time, nodes] or [time, nodes, features], "
+            f"got {raw.shape}"
+        )
     if not np.isfinite(values).all():
-        raise ValueError("PEMS08 source contains NaN or infinite values")
+        raise ValueError("Source contains NaN or infinite values")
     if np.any(values < 0):
-        raise ValueError("PEMS08 flow values must be non-negative")
+        raise ValueError("Source values must be non-negative")
 
     start_time = datetime.fromisoformat(args.start_time)
     time_slots = 1440 // args.interval_minutes

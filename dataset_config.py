@@ -47,6 +47,36 @@ DATASET_CONFIG = {
         time_slots=48,
         graphs={"adaptive": Path("adp/tp/adaptive_adj_mx.pkl")},
     ),
+    "sd": DatasetConfig(
+        num_nodes=673,
+        dataset_path=Path("data/sd"),
+        time_slots=288,
+        graphs={
+            "physical": Path("data/st_data/sd/sd_rn_adj.npy"),
+            "semantic": Path("data/st_data/sd/cached_dist_matrix.npy"),
+        },
+        loss_space="standardized",
+    ),
+    "shenzhen": DatasetConfig(
+        num_nodes=247,
+        dataset_path=Path("data/shenzhen"),
+        time_slots=288,
+        graphs={
+            "physical": Path("data/st_data/shenzhen/shenzhen_adj.npy"),
+            "semantic": Path("data/st_data/shenzhen/cached_dist_matrix.npy"),
+        },
+        loss_space="standardized",
+    ),
+    "urbanev": DatasetConfig(
+        num_nodes=275,
+        dataset_path=Path("data/urbanev"),
+        time_slots=24,
+        graphs={
+            "physical": Path("data/st_data/urbanev/urbanev_adj.npy"),
+            "semantic": Path("data/st_data/urbanev/cached_dist_matrix.npy"),
+        },
+        loss_space="standardized",
+    ),
     "pems08": DatasetConfig(
         num_nodes=170,
         dataset_path=Path("data/pems08"),
@@ -70,6 +100,26 @@ DATASET_CONFIG = {
             "lr_factor": 0.5,
             "min_lrate": 1e-5,
         },
+    ),
+    "pems03": DatasetConfig(
+        num_nodes=170,
+        dataset_path=Path("data/pems03"),
+        time_slots=288,
+        graphs={
+            "physical": Path("data/st_data/pems03/pems03_adj_clip.npy"),
+            "semantic": Path("data/st_data/pems03/cached_dist_matrix.npy"),
+        },
+        loss_space="standardized",
+    ),
+    "pems04": DatasetConfig(
+        num_nodes=170,
+        dataset_path=Path("data/pems04"),
+        time_slots=288,
+        graphs={
+            "physical": Path("data/st_data/pems04/pems04_adj_clip.npy"),
+            "semantic": Path("data/st_data/pems04/cached_dist_matrix.npy"),
+        },
+        loss_space="standardized",
     ),
 }
 
